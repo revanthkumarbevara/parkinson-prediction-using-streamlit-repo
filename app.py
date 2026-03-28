@@ -51,16 +51,51 @@ st.markdown("""
 
 @st.cache_resource
 def load_artifacts():
-    with open("model.pkl",        "rb") as f: model       = pickle.load(f)
-    with open("scaler.pkl",       "rb") as f: scaler      = pickle.load(f)
-    with open("feature_cols.pkl", "rb") as f: feature_cols = pickle.load(f)
-    return model, scaler, feature_cols
+    import os
+    import pandas as pd
+    from xgboost import XGBClassifier
+    from imblearn.over_sampling import SMOTE
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
 
-try:
-    model, scaler, feature_cols = load_artifacts()
-    model_loaded = True
-except FileNotFoundError:
-    model_loaded = False
+    FEATURE_COLS = [
+        "MDVP:Fo(Hz)", "MDVP:Fhi(Hz)", "MDVP:Flo(Hz)",
+        "MDVP:Jitter(%)", "MDVP:Jitter(Abs)", "MDVP:RAP", "MDVP:PPQ", "Jitter:DDP",
+        "MDVP:Shimmer", "MDVP:Shimmer(dB)", "Shimmer:APQ3", "Shimmer:APQ5",
+        "MDVP:APQ", "Shimmer:DDA",
+        "NHR", "HNR",
+        "RPDE", "DFA", "spread1", "spread2", "D2", "PPE",
+    ]
+
+    # Load pkl files if they exist, otherwise train fresh
+    if os.path.exists("model.pkl"):
+        with open("model.pkl",        "rb") as f: model        = pickle.load(f)
+        with open("scaler.pkl",       "rb") as f: scaler       = pickle.load(f)
+        with open("feature_cols.pkl", "rb") as f: feature_cols = pickle.load(f)
+    else:
+        # Auto-train if pkl files are missing (e.g. on Streamlit Cloud)
+        df = pd.read_csv("parkinsons_dataset.csv")
+        X  = df[FEATURE_COLS].values
+        y  = df["status"].values
+
+        X_train, _, y_train, _ = train_test_split(
+            X, y, test_size=0.2, random_state=42, stratify=y
+        )
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+
+        smote = SMOTE(random_state=42)
+        X_bal, y_bal = smote.fit_resample(X_train_s, y_train)
+
+        model = XGBClassifier(
+            n_estimators=300, max_depth=4, learning_rate=0.05,
+            subsample=0.8, colsample_bytree=0.8,
+            eval_metric="logloss", random_state=42,
+        )
+        model.fit(X_bal, y_bal)
+        feature_cols = FEATURE_COLS
+
+    return model, scaler, feature_cols
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Header
