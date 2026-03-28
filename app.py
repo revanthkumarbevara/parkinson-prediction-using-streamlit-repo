@@ -46,12 +46,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Load model artifacts  (cached so they load only once)
+# Load model artifacts (auto-trains if pkl files are missing)
 # ─────────────────────────────────────────────────────────────────────────────
 
 @st.cache_resource
 def load_artifacts():
-    import os
     import pandas as pd
     from xgboost import XGBClassifier
     from imblearn.over_sampling import SMOTE
@@ -67,7 +66,6 @@ def load_artifacts():
         "RPDE", "DFA", "spread1", "spread2", "D2", "PPE",
     ]
 
-    # Load pkl files if they exist, otherwise train fresh
     if os.path.exists("model.pkl"):
         with open("model.pkl",        "rb") as f: model        = pickle.load(f)
         with open("scaler.pkl",       "rb") as f: scaler       = pickle.load(f)
@@ -81,7 +79,7 @@ def load_artifacts():
         X_train, _, y_train, _ = train_test_split(
             X, y, test_size=0.2, random_state=42, stratify=y
         )
-        scaler = StandardScaler()
+        scaler    = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
 
         smote = SMOTE(random_state=42)
@@ -104,8 +102,19 @@ def load_artifacts():
 st.markdown('<p class="main-title">🧠 Parkinson\'s Voice Detection</p>', unsafe_allow_html=True)
 st.markdown('<p class="sub-title">Upload a short voice recording to screen for Parkinson\'s tremor indicators.</p>', unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Load model  ← FIXED: model_loaded is now properly set before it is used
+# ─────────────────────────────────────────────────────────────────────────────
+
+try:
+    model, scaler, feature_cols = load_artifacts()
+    model_loaded = True
+except Exception as e:
+    model_loaded = False
+    st.error(f"❌ Error loading model: {e}")
+
 if not model_loaded:
-    st.error("⚠️  Model not found. Run `python train_model.py` first to generate model.pkl.")
+    st.warning("⚠️  Model could not be loaded. Please check the logs above.")
     st.stop()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +159,6 @@ uploaded_file = st.file_uploader(
 
 if uploaded_file is not None:
 
-    # Save to temp file so parselmouth / librosa can read it
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         tmp.write(uploaded_file.read())
         tmp_path = tmp.name
@@ -176,9 +184,9 @@ if uploaded_file is not None:
     X_input  = np.array([[features[col] for col in feature_cols]])
     X_scaled = scaler.transform(X_input)
 
-    proba    = model.predict_proba(X_scaled)[0]   # [P(healthy), P(parkinsons)]
-    pred     = model.predict(X_scaled)[0]
-    conf     = proba[pred] * 100
+    proba = model.predict_proba(X_scaled)[0]
+    pred  = model.predict(X_scaled)[0]
+    conf  = proba[pred] * 100
 
     # ── Result banner ─────────────────────────────────────────────────────────
     st.markdown("---")
@@ -233,21 +241,18 @@ if uploaded_file is not None:
     # ── Feature breakdown ─────────────────────────────────────────────────────
     with st.expander("📊 Extracted vocal biomarkers", expanded=False):
         feat_df = pd.DataFrame({
-            "Feature":     list(features.keys()),
-            "Value":       [round(v, 6) for v in features.values()],
+            "Feature": list(features.keys()),
+            "Value":   [round(v, 6) for v in features.values()],
         })
-
-        # Load reference ranges from training data
         try:
-            ref_df   = pd.read_csv("parkinsons_dataset.csv")
-            means    = ref_df[feature_cols].mean()
-            stds     = ref_df[feature_cols].std()
-            feat_df["Healthy mean ± std"] = [
+            ref_df = pd.read_csv("parkinsons_dataset.csv")
+            means  = ref_df[feature_cols].mean()
+            stds   = ref_df[feature_cols].std()
+            feat_df["Dataset mean ± std"] = [
                 f"{means[c]:.4f} ± {stds[c]:.4f}" for c in feature_cols
             ]
         except Exception:
             pass
-
         st.dataframe(feat_df, use_container_width=True, hide_index=True)
 
     # ── Feature importance bar chart ──────────────────────────────────────────
@@ -262,7 +267,7 @@ if uploaded_file is not None:
             marker_color="#3949ab",
         ))
         fig_bar.update_layout(
-            title="Top-10 Feature Importances ",
+            title="Top-10 Feature Importances (XGBoost)",
             xaxis_title="Importance",
             yaxis={"autorange": "reversed"},
             height=380,
@@ -276,7 +281,7 @@ if uploaded_file is not None:
 
 st.markdown("---")
 st.markdown(
-    "<small>Model: Random Forest · Dataset: UCI Parkinson's Voice (195 samples) · "
+    "<small>Model: XGBoost + SMOTE · Dataset: UCI Parkinson's Voice (195 samples) · "
     "Built with Streamlit + parselmouth + librosa</small>",
     unsafe_allow_html=True,
 )
